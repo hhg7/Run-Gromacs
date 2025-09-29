@@ -26,7 +26,7 @@ $parser->add_args(
 	['--nvt-input-file', '-nvt', required => 1, help => 'Equilibration run - temperature: constant Number of particles, Volume, and Temperature', type => 'Scalar'],
 	['--overwrite', '-o', type => 'Bool', default => 0, help => 'Overwrite old output files, by default off', required => 0],
 	['--pdb', '-p', required => 1, type => 'Scalar', required => 1, help => 'Input PDB file; Perhaps better without H?'],
-	['--production-input-file', '-production', required => 1, type => 'Scalar', help => 'Production Input File'],
+	['--production-input-file', '-production', required => 0, type => 'Scalar', help => 'Production Input File'],
 	['--water', '-w', type => 'Scalar', default => 'tip3p', help => 'Water model (e.g. "tip3p")', required => 0]
 );
 my $args = $parser->parse_args( @ARGV );
@@ -36,7 +36,9 @@ $input{npt} = $args->npt_input_file;
 $input{nvt} = $args->nvt_input_file;
 $input{emin} = $args->emin_input_file;
 $input{pdb} = $args->pdb;
-$input{production_input_file} = $args->production_input_file;
+if ($args->production_input_file) {
+	$input{production_input_file} = $args->production_input_file;
+}
 
 my @missing_input_files = grep {not -f $_} values %input;
 if (scalar @missing_input_files > 0) {
@@ -152,6 +154,10 @@ my $npt_tpr = 'npt.tpr';
 $r = job("gmx grompp -f $input{npt} -c $nvt_gro -r $nvt_gro -t $nvt_cpt -p $topol -o $npt_tpr", $npt_tpr);
 my ($npt_edr, $npt_gro, $npt_cpt) = ('npt.edr', 'npt.gro', 'npt.cpt');
 $r = job('gmx mdrun -ntmpi 1 -ntomp 8 -v -deffnm npt', $npt_edr, $npt_gro, $npt_cpt);
+unless ($args->production_input_file) {
+	say 'no production input file was specified, so finishing now...';
+	exit;
+}
 #------------
 # Production run
 #------------
