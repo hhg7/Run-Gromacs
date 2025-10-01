@@ -3,7 +3,7 @@
 use 5.042;
 no source::encoding;
 #use re 'debugcolor';
-use File::Temp 'tempfile';
+#use File::Temp 'tempfile';
 use warnings FATAL => 'all';
 use Cwd 'getcwd';
 use List::MoreUtils 'first_index';
@@ -19,13 +19,13 @@ This script plots output from Gromacs output files and puts all output into a La
 
 =cut
 
-my @log_files = ('em.log', 'nvt.log', 'npt.log', 'md.log');
-my @xvg_files = ('gyrate.xvg', 'rmsd_xray.xvg', 'mindist.xvg');
-my @missing_files = grep {not -f $_} (@log_files, @xvg_files);
-if (scalar @missing_files > 0) {
-	p @missing_files;
-	die 'the above files are not present or are not files.';
-}
+#my @log_files = ('em.log', 'nvt.log', 'npt.log');#, 'md.log');
+#my @xvg_files = ('gyrate.xvg', 'rmsd_xray.xvg', 'mindist.xvg');
+#my @missing_files = grep {not -f $_} (@log_files, @xvg_files);
+#if (scalar @missing_files > 0) {
+#	p @missing_files;
+#	die 'the above files are not present or are not files.';
+#}
 my $tex_filename = 'simulation.report.tex';
 open my $tex, '>', $tex_filename;
 say $tex '%written by ' . getcwd() . '/' . __FILE__;
@@ -40,146 +40,101 @@ say $tex '\pdfsuppresswarningpagegroup=1
 \begin{document}
 \maketitle
 \listoffigures';
-my ($tmp, $tmp_filename) = tempfile(DIR => '/tmp', SUFFIX => '.py', UNLINK => 0);
-close $tmp;
+#my ($tmp, $tmp_filename) = tempfile(DIR => '/tmp', SUFFIX => '.py', UNLINK => 0);
+#close $tmp;
 my %log2title = (
 	'npt.log' => 'Number of particles, Pressure, and Temperature are held constant',
 	'nvt.log' => 'NVT ensemble (constant Number of particles, Volume, and Temperature)',
 	'em.log'  => 'Energy Minimization',
 	'md.log'  => 'Molecular Dynamics'
-);foreach my $log (@log_files) {
+);
+foreach my $log ('em.log', 'nvt.log', 'npt.log', 'md.log') {
+	next if not -f $log;
 	open my $fh, '<', $log;
 	my @log = <$fh>;
 	close $fh;
+	my $last_i = first_index { /^\h+Statistics over \d+ steps using \d+ frames/ } @log;
+	if ($last_i > 0) {
+		splice @log, $last_i - $#log;
+	}
 	chomp @log;
-	my %input;
-	my $first_input  = first_index { $_ eq 'Input Parameters:' } @log;
-	foreach my $i ($first_input+1..$#log) { # save for later use
-		last unless $log[$i] =~ m/^\h+[\w\-]+\h+=\h+\S/;
-		$log[$i] =~ s/^\h+//;
-		my @line = split /\h+=\h+/, $log[$i];
-		if (scalar @line != 2) {
-			p @line;
-			die "Element $i of \"$log\" doesn't have 2 elements";
+#	p @log, array_max => scalar @log;
+	foreach my $writing_index (reverse grep { $log[$_] =~ m/^Writing checkpoint/} 0..$#log) {
+		splice @log, $writing_index, 3;
+	}
+	my @time_indices = grep {
+									$log[$_-1] =~ m/^\h+Step\h+Time$/
+								&&
+									$log[$_] =~ m/^\h+\d+\h+[\d\.]+$/
+								&&
+									$log[$_+1] eq ''
+								&&
+									$log[$_+2] eq '   Energies (kJ/mol)'
+								} 0..$#log;
+	if (scalar @time_indices == 0) {
+		die "Couldn't get times for $log";
+	}
+	my @time;
+	foreach my $time_index (@time_indices) {
+		if ($log[$time_index] =~ m/(\d+)\.(\d+)$/) {
+			push @time, "$1.$2";
+		} else {
+			die "$log[$time_index] failed regex.";
 		}
-		$input{$line[0]} = $line[1];
 	}
-#	my $first_energy = first_index { $_ =~ m/^\h+Step\h+Time\n/} @log; # prevent false/spurious matches
-	my $newline_str = join ('', @log);
-	my @energy_types = (
-		'Bond', 'U-B', 'Proper Dih.', 'Improper Dih.', 'CMAP Dih.',
-		'LJ-14', 'Coulomb-14', 'LJ (SR)', 'Coulomb (SR)','Coul. recip.',
-		'Potential','Pressure (bar)','Constr. rmsd',
-		'Position Rest.', # NPT only
-		'Kinetic En.','Total Energy','Conserved En.','Temperature'
-	);
-	my $en_regex = '(Bond|U\-B|Proper\hDih\.|Improper\hDih\.|CMAP\hDih\.|LJ\-14|Coulomb\-14|LJ\h\(SR\)|Coulomb\h\(SR\)|Coul.\hrecip\.|Potential|Pressure\h\(bar\)|Constr\.\hrmsd|Total\hEnergy|Conserved\hEn\.|Temperature|Kinetic\hEn\.|Position\hRest\.)'; # energy regex
-	my $nu_regex = '(-?[\d\.e\+\-]+)'; # numeric regex
-	my @time = $newline_str =~ m/
-	\h+Step\h+Time\h+\d+\h+([\d\.]+)
-	\h+Energies\h\(kJ\/mol\)
-	/xg;
-	my $output_type;
-	my @energies = $newline_str =~ m/
-	Step\h+Time\h+\d+\h+[\d\.]+
-	\h+Energies\h\(kJ\/mol\)
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	/xg;
-	$output_type = 'EM' if scalar @energies > 0;
-	if (scalar @energies == 0) {
-		@energies = $newline_str =~ m/
-	Step\h+Time\h+\d+\h+[\d\.]+
-	\h+Energies\h\(kJ\/mol\)
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	
-	\h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex
-	/xg;
-		$output_type = 'MD' if scalar @energies > 0;
-	}
-	if (scalar @energies == 0) {
-		@energies = $newline_str =~ m/
-	Step\h+Time\h+\d+\h+[\d\.]+
-	\h+Energies\h\(kJ\/mol\)
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	
-	\h+ $en_regex \h+ $en_regex \h+ $en_regex
-	\h+ $nu_regex \h+ $nu_regex \h+ $nu_regex
-	/xg;
-		$output_type = 'NPT' if scalar @energies > 0;
-	}
-	if (scalar @energies == 0) {
-		say $newline_str;
-		die "failed to get any energy data from $log";
-	}
-	my (@plot, %n_to_get_numeric);
-	if ($output_type eq 'EM') {
-		%n_to_get_numeric = (
-			Bond => 5,	'U-B' => 5,	'Proper Dih.' => 5,	'Improper Dih.' => 5,
-			'CMAP Dih.' => 5,
-			'LJ-14' => 5,'Coulomb-14' => 5,'LJ (SR)' => 5,'Coulomb (SR)' => 5,'Coul. recip.' => 5,'Potential' => 3,'Pressure (bar)' => 3,'Constr. rmsd' => 3,
-		);
-	} elsif ($output_type eq 'MD') {
-		%n_to_get_numeric = (
-			Bond => 5,	'U-B' => 5,	'Proper Dih.' => 5,	'Improper Dih.' => 5, 'CMAP Dih.' => 5,
-			'LJ-14' => 5,'Coulomb-14' => 5,'LJ (SR)' => 5,'Coulomb (SR)' => 5,'Coul. recip.' => 5,'Potential' => 5,'Pressure (bar)' => 2,'Constr. rmsd' => 2,
-			'Kinetic En.' => 5,	'Total Energy' => 5,'Conserved En.' => 5,'Temperature' => 5,
-		);
-	} elsif ($output_type eq 'NPT') {
-		%n_to_get_numeric = (
-			Bond => 5,	'U-B' => 5,	'Proper Dih.' => 5,	'Improper Dih.' => 5,
-			'CMAP Dih.' => 5,
-			'LJ-14' => 5,'Coulomb-14' => 5,'LJ (SR)' => 5,'Coulomb (SR)' => 5,'Coul. recip.' => 5,'Potential' => 5,
-			'Kinetic En.'    => 5, 'Position Rest.' => 5,	'Constr. rmsd' => 3,
-			'Total Energy' => 5,'Conserved En.' => 5,'Temperature' => 3,,'Pressure (bar)' => 3,
-		);
-	}
-	foreach my $energy_type (grep {$newline_str =~ m/\Q$_\E/} @energy_types) {
-		die "$energy_type has no defined step for $log" if not defined $n_to_get_numeric{$energy_type};
-		my @indices = map {$_ + $n_to_get_numeric{$energy_type}} grep {$energies[$_] eq $energy_type} 0..$#energies;
-		if ($indices[-1] > $#energies) {
-			die
+	my $reading_energies = 'false';
+	my (%d, @energies);
+	my $newline_str = join ('я', @log);
+	foreach (@log) {
+		if ($_ eq '   Energies (kJ/mol)') {
+			$reading_energies = 'true';
+			next;
 		}
-		if (scalar @indices != scalar @time) {
-			printf STDERR ("$energy_type has %u data points.\n", scalar @indices);
-			die "$energy_type doesn't have the correct number of energies";
+		if ($_ eq '') {
+			$reading_energies = 'false';
+			next;
 		}
+		next unless $reading_energies eq 'true';
+		if (/^\h+[A-Z]/) {
+			while ($_ =~ m/(.{1,15})/g) {
+				my $e = $1;
+				$e =~ s/^\h+//;
+				push @energies, $e;
+			}
+			next;
+		}
+		if ((/^\h+\-?\d/) && (scalar @energies > 0)) {
+			$_ =~ s/^\h+//;
+			my @line = split /\s+/, $_;
+			if (scalar @line != scalar @energies) {
+				p @energies;
+				p @line;
+				die "$log line $. has " . scalar @line . ' energies, but should have ' . scalar @energies . "\n";
+			}
+			foreach my $energy (@energies) {
+				push @{ $d{$energy} }, shift @line;
+			}
+			undef @energies;
+		}
+	}
+	my @plot;
+	foreach my $energy (sort keys %d) {
 		my $ylab = '(kJ/mol)';
-		$ylab = 'bar' if $energy_type eq 'Pressure (bar)';
-		$ylab = 'K'   if $energy_type eq 'Temperature';
+		$ylab = 'bar' if $energy =~ m/^Pres/;
+		$ylab = 'K'   if $energy eq 'Temperature';
+		$ylab = 'Å'   if $energy =~ m/RMSD/i;
 		push @plot, {
 			data => {
-				$energy_type => [
-					[@time],
-					[@energies[@indices]]
+				$energy => [
+					[     @time       ],
+					[@{ $d{$energy} } ]
 				]
 			},
 			'plot.type' => 'plot',
-			title       => $energy_type,
+			title       => $energy,
 			'show.legend' => 0,
 			'set.options' => { # set options overrides global settings
-				$energy_type => 'color="red", linewidth=2',
+				$energy => 'color="red", linewidth=2',
 			},
 			xlabel => 'Time (ps)',
 			ylabel => $ylab
@@ -190,8 +145,8 @@ my %log2title = (
 	my $output_image_file = "$stem.svg";
 	my $suptitle = uc $stem;
 	plot({
-		'input.file'      => $tmp_filename,
-		execute           => 0,
+#		'input.file'      => $tmp_filename,
+#		execute           => 0,
 		'output.filename' => $output_image_file,
 		plots             => \@plot,
 		ncols             => 4,
@@ -209,6 +164,7 @@ my %log2title = (
 		width        => '\textwidth'
 	});
 }
+exit 0 unless -f 'gyrate.xvg';
 my (%plot_data, %gy);
 my @gy_header = ('time', 'Gyration Radius of Molecule', 'Radius of gyration (x)', 'Radius of gyration (y)', 'Radius of gyration (z)');
 open my $fh, '<', 'gyrate.xvg';
@@ -225,8 +181,8 @@ foreach my $key (grep {$_ ne 'time'} @gy_header) {
 	@{ $plot_data{$key}[1] } = @{ $gy{$key}   };
 }
 plot({
-	execute           => 0,
-	'input.file'      => $tmp_filename,
+#	execute           => 0,
+#	'input.file'      => $tmp_filename,
 	data              => \%plot_data,
 	'output.filename' => 'gyrate.svg',
 	'plot.type'       => 'plot',
@@ -272,8 +228,8 @@ while (<$fh>) {
 close $fh;
 plot({
 	data              => \%plot_data,
-	execute           => 0,
-	'input.file'      => $tmp_filename,
+#	execute           => 0,
+#	'input.file'      => $tmp_filename,
 	'output.filename' => 'mindist.svg',
 	'plot.type'       => 'plot',
 	set_figwidth      => 12,
@@ -313,8 +269,8 @@ plot({
 			[@rmsd]
 		]
 	},
-	execute           => 1,
-	'input.file'      => $tmp_filename,
+#	execute           => 1,
+#	'input.file'      => $tmp_filename,
 	'output.filename' => 'rmsd_xray.svg',
 	'plot.type'       => 'plot',
 	set_figwidth      => 12,
