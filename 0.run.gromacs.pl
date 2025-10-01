@@ -53,6 +53,11 @@ if ($args->overwrite) {
 }
 $input{water} = $args->water;
 $input{force_field} = $args->force_field;
+if ($args->gmx) {
+	$input{gmx} = $args->gmx;
+} else {
+	$input{gmx} = 'gmx';
+}
 
 sub job ($cmd, @product_files) {
 	say 'The command is ' . colored(['blue on_bright_red'], $cmd);
@@ -94,21 +99,21 @@ my $ignore_H = '';
 if ($args->ignore_H) {
 	$ignore_H = '-ignh';
 }
-my $r = job("gmx pdb2gmx -f $input{pdb} $ignore_H -o $processed_gro -water $input{water} -ff $input{force_field}", $processed_gro, $topol);
+my $r = job("$input{gmx} pdb2gmx -f $input{pdb} $ignore_H -o $processed_gro -water $input{water} -ff $input{force_field}", $processed_gro, $topol);
 p $r;
 #------------
 # Defining the simulation box
 #------------
 my $new_box = $processed_gro;
 $new_box =~ s/gro$/newbox.gro/;
-$r = job("gmx editconf -f $processed_gro -o $new_box -c -d 1.0 -bt dodecahedron", $new_box);
+$r = job("$input{gmx} editconf -f $processed_gro -o $new_box -c -d 1.0 -bt dodecahedron", $new_box);
 p $r;
 #------------
 # fill the box with water
 #------------
 my $solv = $new_box;
 $solv =~ s/newbox.gro$/solv.gro/;
-$r = job("gmx solvate -cp $new_box -cs spc216.gro -o $solv -p $topol", $solv);
+$r = job("$input{gmx} solvate -cp $new_box -cs spc216.gro -o $solv -p $topol", $solv);
 p $r;
 #------------
 # prepare input for gmx genion
@@ -118,42 +123,42 @@ my $ions_mdp = 'ions.mdp';
 $r = job("touch $ions_mdp", $ions_mdp);
 p $r;
 my $ions_tpr = 'ions.tpr';
-$r = job("gmx grompp -f $ions_mdp -c $solv -p topol.top -o $ions_tpr", $ions_tpr);
+$r = job("$input{gmx} grompp -f $ions_mdp -c $solv -p topol.top -o $ions_tpr", $ions_tpr);
 p $r;
 my $solv_ions = $solv;
 $solv_ions =~ s/solv\.gro$/solv_ions.gro/;
 unlink $solv_ions if -f $solv_ions;
-$r = job("printf \"SOL\\n\" | gmx genion -s $ions_tpr -o $solv_ions -conc 0.15 -p $topol -pname NA -nname CL -neutral", $solv_ions);
+$r = job("printf \"SOL\\n\" | $input{gmx} genion -s $ions_tpr -o $solv_ions -conc 0.15 -p $topol -pname NA -nname CL -neutral", $solv_ions);
 p $r;
 #--------------
 # energy minimization
 #--------------
 my $em_tpr = 'em.tpr'; # .tpr: a binary run input file that combines coordinates, topology, all associated force field parameters, and all input settings defined in the .mdp file
-$r = job( "gmx grompp -f $input{emin} -c $solv_ions -p $topol -o $em_tpr", $em_tpr);
+$r = job( "$input{gmx} grompp -f $input{emin} -c $solv_ions -p $topol -o $em_tpr", $em_tpr);
 my ($em_log, $em_gro, $em_trr, $em_edr) = ('em.log', 'em.gro', 'em.trr', 'em.edr');
 p $r;
 say '---------------';
 say '--Now running energy minimization';
 say '---------------';
-$r = job( 'gmx mdrun -v -deffnm em -ntmpi 1 -ntomp 8', $em_log, $em_gro, $em_trr, $em_edr);
+$r = job( "$input{gmx} mdrun -v -deffnm em -ntmpi 1 -ntomp 8", $em_log, $em_gro, $em_trr, $em_edr);
 #------------
 # Equilibration run - temperature
 # first phase is conducted under an NVT ensemble (constant Number of particles, Volume, and Temperature)
 #--------------
 my $nvt_tpr = 'nvt.tpr';
-$r = job("gmx grompp -f $input{nvt} -c $em_gro -r $em_gro -p $topol -o $nvt_tpr", $nvt_tpr);
+$r = job("$input{gmx} grompp -f $input{nvt} -c $em_gro -r $em_gro -p $topol -o $nvt_tpr", $nvt_tpr);
 my ($nvt_log, $nvt_edr, $nvt_gro, $nvt_cpt) = ('nvt.log', 'nvt.edr', 'nvt.gro', 'nvt.cpt');
 # checkpoint file is "cpt"
 # comment out if debugging, it's slow
-$r = job("gmx mdrun -ntmpi 1 -ntomp 8 -v -deffnm nvt", $nvt_log, $nvt_edr, $nvt_gro, $nvt_cpt);
+$r = job("$input{gmx} mdrun -ntmpi 1 -ntomp 8 -v -deffnm nvt", $nvt_log, $nvt_edr, $nvt_gro, $nvt_cpt);
 #------------
 # Equilibration run - pressure
 # Number of particles, Pressure, and Temperature are held constant (isothermal/isobaric)
 #------------
 my $npt_tpr = 'npt.tpr';
-$r = job("gmx grompp -f $input{npt} -c $nvt_gro -r $nvt_gro -t $nvt_cpt -p $topol -o $npt_tpr", $npt_tpr);
+$r = job("$input{gmx} grompp -f $input{npt} -c $nvt_gro -r $nvt_gro -t $nvt_cpt -p $topol -o $npt_tpr", $npt_tpr);
 my ($npt_edr, $npt_gro, $npt_cpt) = ('npt.edr', 'npt.gro', 'npt.cpt');
-$r = job('gmx mdrun -ntmpi 1 -ntomp 8 -v -deffnm npt', $npt_edr, $npt_gro, $npt_cpt);
+$r = job("$input{gmx} mdrun -ntmpi 1 -ntomp 8 -v -deffnm npt", $npt_edr, $npt_gro, $npt_cpt);
 unless ($args->production_input_file) {
 	say 'no production input file was specified, so finishing now...';
 	exit;
@@ -162,19 +167,19 @@ unless ($args->production_input_file) {
 # Production run
 #------------
 my $md_tpr = 'md.tpr';
-$r = job("gmx grompp -f $input{production_input_file} -c $npt_gro -t $npt_cpt -p $topol -o $md_tpr", $md_tpr);
+$r = job("$input{gmx} grompp -f $input{production_input_file} -c $npt_gro -t $npt_cpt -p $topol -o $md_tpr", $md_tpr);
 my ($md_log, $md_edr, $md_gro, $md_xtc, $md_prev_cpt) = ('md.log', 'md.edr', 'md.gro', 'md.xtc', 'md_prev.cpt');
-$r = job('gmx mdrun -ntmpi 1 -ntomp 4 -v -deffnm md', $md_log, $md_edr, $md_gro, $md_xtc, $md_prev_cpt);
+$r = job("$input{gmx} mdrun -ntmpi 1 -ntomp 4 -v -deffnm md", $md_log, $md_edr, $md_gro, $md_xtc, $md_prev_cpt);
 #------------
 # Analysis
 #------------
 my $md_center = 'md_center.xtc';
-job("printf \"1\\n1\\n\" | gmx trjconv -s $md_tpr -f $md_xtc -o $md_center -center -pbc mol", $md_center);
+job("printf \"1\\n1\\n\" | $input{gmx} trjconv -s $md_tpr -f $md_xtc -o $md_center -center -pbc mol", $md_center);
 
-job("printf \"1\\n1\\n\" | gmx mindist -s md.tpr -f $md_center -pi -od mindist.xvg", 'mindist.xvg');
+job("printf \"1\\n1\\n\" | $input{gmx} mindist -s md.tpr -f $md_center -pi -od mindist.xvg", 'mindist.xvg');
 my $rmsd_xray = 'rmsd_xray.xvg';
-job("printf \"4\\n1\\n\" | gmx rms -s $em_tpr -f $md_center -o $rmsd_xray -tu ns -xvg none", $rmsd_xray);
+job("printf \"4\\n1\\n\" | $input{gmx} rms -s $em_tpr -f $md_center -o $rmsd_xray -tu ns -xvg none", $rmsd_xray);
 
 # Measure compactness with radius of gyration
 my $gyrate_xvg = 'gyrate.xvg';
-job("echo 1 | gmx gyrate -f md_center.xtc -s md.tpr -o $gyrate_xvg -xvg none", $gyrate_xvg);
+job("echo 1 | $input{gmx} gyrate -f md_center.xtc -s md.tpr -o $gyrate_xvg -xvg none", $gyrate_xvg);

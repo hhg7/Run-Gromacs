@@ -19,7 +19,7 @@ This script plots output from Gromacs output files and puts all output into a La
 
 =cut
 
-#my @log_files = ('em.log', 'nvt.log', 'npt.log');#, 'md.log');
+my @log_files = ('em.log', 'nvt.log', 'npt.log', 'md.log');
 #my @xvg_files = ('gyrate.xvg', 'rmsd_xray.xvg', 'mindist.xvg');
 #my @missing_files = grep {not -f $_} (@log_files, @xvg_files);
 #if (scalar @missing_files > 0) {
@@ -48,11 +48,30 @@ my %log2title = (
 	'em.log'  => 'Energy Minimization',
 	'md.log'  => 'Molecular Dynamics'
 );
-foreach my $log ('em.log', 'nvt.log', 'npt.log', 'md.log') {
-	next if not -f $log;
+foreach my $log (grep {-f $_} @log_files) {
 	open my $fh, '<', $log;
 	my @log = <$fh>;
 	close $fh;
+	my $gromacs_i = first_index {/^GROMACS version:\h+\S+/} @log;
+	my $gromacs_version;
+	if ($log[$gromacs_i] =~ m/^GROMACS version:\h+(\S+)/) {
+		$gromacs_version = $1;
+	} else {
+		die "$log: $log[$gromacs_i] failed regex";
+	}
+	my $performance_i = first_index { /^Performance:\h+\d+/ } @log;
+	my ($speed1, $speed2);
+	if (($performance_i > 0) && ($log[$performance_i - 1] =~ m/^\h+(\S+)\h+(\S+)/)) {
+		($speed1, $speed2) = ($1, $2);
+	}
+	if (
+			($performance_i > 0)
+			&&
+			($log[$performance_i] =~ m/^Performance:\h+(\d+)\.(\d+)\h+(\d+)\.(\d+)/)
+		) {
+		$speed1 = "$1.$2 $speed1";
+		$speed2 = "$3.$4 $speed2";
+	}
 	my $last_i = first_index { /^\h+Statistics over \d+ steps using \d+ frames/ } @log;
 	if ($last_i > 0) {
 		splice @log, $last_i - $#log;
@@ -118,6 +137,10 @@ foreach my $log ('em.log', 'nvt.log', 'npt.log', 'md.log') {
 		}
 	}
 	my @plot;
+	my $subtitle = "GROMACS $gromacs_version";
+	if (defined $speed1) {
+		$subtitle .= "; Computation time: $speed1; $speed2";
+	}
 	foreach my $energy (sort keys %d) {
 		my $ylab = '(kJ/mol)';
 		$ylab = 'bar' if $energy =~ m/^Pres/;
@@ -131,13 +154,14 @@ foreach my $log ('em.log', 'nvt.log', 'npt.log', 'md.log') {
 				]
 			},
 			'plot.type' => 'plot',
-			title       => $energy,
-			'show.legend' => 0,
 			'set.options' => { # set options overrides global settings
 				$energy => 'color="red", linewidth=2',
 			},
-			xlabel => 'Time (ps)',
-			ylabel => $ylab
+			'show.legend' => 0,
+#			subtitle      => $subtitle,
+			title         => $energy,
+			xlabel        => 'Time (ps)',
+			ylabel        => $ylab
 		};
 	}
 	my $stem = $log;
@@ -164,135 +188,143 @@ foreach my $log ('em.log', 'nvt.log', 'npt.log', 'md.log') {
 		width        => '\textwidth'
 	});
 }
-exit 0 unless -f 'gyrate.xvg';
 my (%plot_data, %gy);
-my @gy_header = ('time', 'Gyration Radius of Molecule', 'Radius of gyration (x)', 'Radius of gyration (y)', 'Radius of gyration (z)');
-open my $fh, '<', 'gyrate.xvg';
-while (<$fh>) {
-	chomp;
-	my @line = split;
-	foreach my $col (@gy_header) {
-		push @{ $gy{$col} }, shift @line;
+if (-f 'gyrate.xvg') {
+	my @gy_header = ('time', 'Gyration Radius of Molecule', 'Radius of gyration (x)', 'Radius of gyration (y)', 'Radius of gyration (z)');
+	open my $fh, '<', 'gyrate.xvg';
+	while (<$fh>) {
+		chomp;
+		my @line = split;
+		foreach my $col (@gy_header) {
+			push @{ $gy{$col} }, shift @line;
+		}
 	}
+	close $fh;
+	foreach my $key (grep {$_ ne 'time'} @gy_header) {
+		@{ $plot_data{$key}[0] } = @{ $gy{'time'} };
+		@{ $plot_data{$key}[1] } = @{ $gy{$key}   };
+	}
+	plot({
+	#	execute           => 0,
+	#	'input.file'      => $tmp_filename,
+		data              => \%plot_data,
+		'output.filename' => 'gyrate.svg',
+		'plot.type'       => 'plot',
+		set_figwidth      => 12,
+		title             => 'Gyration',
+		xlabel            => 'Time (ps)',
+		ylabel            => 'Radius (nm)',
+		xlim              => "0, $gy{'time'}[-1]" # avoid whitespace on right and left sides
+	});
+	write_latex_figure({
+		alignment    => '\centering',
+		'image.file' => 'gyrate.svg',
+		caption      => 'Radii of gyration',
+		label        => "fig:gyrate",
+		fh           => $tex,
+		width        => '\textwidth'
+	});
 }
-close $fh;
-foreach my $key (grep {$_ ne 'time'} @gy_header) {
-	@{ $plot_data{$key}[0] } = @{ $gy{'time'} };
-	@{ $plot_data{$key}[1] } = @{ $gy{$key}   };
-}
-plot({
-#	execute           => 0,
-#	'input.file'      => $tmp_filename,
-	data              => \%plot_data,
-	'output.filename' => 'gyrate.svg',
-	'plot.type'       => 'plot',
-	set_figwidth      => 12,
-	title             => 'Gyration',
-	xlabel            => 'Time (ps)',
-	ylabel            => 'Radius (nm)',
-	xlim              => "0, $gy{'time'}[-1]" # avoid whitespace on right and left sides
-});
 undef %plot_data;
-write_latex_figure({
-	alignment    => '\centering',
-	'image.file' => 'gyrate.svg',
-	caption      => 'Radii of gyration',
-	label        => "fig:gyrate",
-	fh           => $tex,
-	width        => '\textwidth'
-});
-my (@col, @time, %prop);
-open $fh, '<', 'mindist.xvg';
-while (<$fh>) {
-	next if /^#/;
-	if (/^@\h+(title|subtitle)\h+"(.+)"/) {
-		$prop{$1} = $2;
-		next;
+if (-f 'mindist.xvg') {
+	my (@col, @time, %prop);
+	open my $fh, '<', 'mindist.xvg';
+	while (<$fh>) {
+		next if /^#/;
+		if (/^@\h+(title|subtitle)\h+"(.+)"/) {
+			$prop{$1} = $2;
+			next;
+		}
+		if (/^@\h+s(\d+)\h+legend\h+"(.+)"/) {
+			$col[$1] = $2;
+			next;
+		}
+		next unless $_ =~ m/^\h+\d+/;
+		if (scalar @col == 0) {
+			die "no keys were defined, and I'm likely seeing data at line $. of mindist.xvg";
+		}
+		chomp;
+		my @line = split;
+		push @time, shift @line;
+		foreach my $col (@col) {
+			push @{ $plot_data{$col}[0] }, $time[-1];
+			push @{ $plot_data{$col}[1] }, shift @line;
+		}
 	}
-	if (/^@\h+s(\d+)\h+legend\h+"(.+)"/) {
-		$col[$1] = $2;
-		next;
-	}
-	next unless $_ =~ m/^\h+\d+/;
-	if (scalar @col == 0) {
-		die "no keys were defined, and I'm likely seeing data at line $. of mindist.xvg";
-	}
-	chomp;
-	my @line = split;
-	push @time, shift @line;
-	foreach my $col (@col) {
-		push @{ $plot_data{$col}[0] }, $time[-1];
-		push @{ $plot_data{$col}[1] }, shift @line;
-	}
+	close $fh;
+	plot({
+		data              => \%plot_data,
+	#	execute           => 0,
+	#	'input.file'      => $tmp_filename,
+		'output.filename' => 'mindist.svg',
+		'plot.type'       => 'plot',
+		set_figwidth      => 12,
+		suptitle          => $prop{title},
+		title             => $prop{subtitle},
+		xlabel            => 'Time (ps)',
+		xlim              => "0, $time[-1]", # avoid whitespace on right and left sides
+		ylabel            => 'Radius (nm)',
+		'set.options'     => {
+			'box1' => 'marker = "|"',
+			'box2' => 'linestyle = "dashed"',
+			'box3' => 'linestyle = "dashdot"',
+		}
+	});
+	write_latex_figure({
+		alignment    => '\centering',
+		'image.file' => 'mindist.svg',
+		caption      => 'Periodic Image Distances',
+		label        => 'fig:mindist',
+		fh           => $tex,
+		width        => '\textwidth'
+	});
 }
-close $fh;
-plot({
-	data              => \%plot_data,
-#	execute           => 0,
-#	'input.file'      => $tmp_filename,
-	'output.filename' => 'mindist.svg',
-	'plot.type'       => 'plot',
-	set_figwidth      => 12,
-	suptitle          => $prop{title},
-	title             => $prop{subtitle},
-	xlabel            => 'Time (ps)',
-	xlim              => "0, $time[-1]", # avoid whitespace on right and left sides
-	ylabel            => 'Radius (nm)',
-	'set.options'     => {
-		'box1' => 'marker = "|"',
-		'box2' => 'linestyle = "dashed"',
-		'box3' => 'linestyle = "dashdot"',
+if (-f 'rmsd_xray.xvg') {
+	open my $fh, '<', 'rmsd_xray.xvg';
+	my (@time, @rmsd);
+	while (<$fh>) {
+		chomp;
+		my @line = split;
+		push @time, $line[0];
+		push @rmsd, $line[1];
 	}
-});
-undef @time;
-write_latex_figure({
-	alignment    => '\centering',
-	'image.file' => 'mindist.svg',
-	caption      => 'Periodic Image Distances',
-	label        => 'fig:mindist',
-	fh           => $tex,
-	width        => '\textwidth'
-});
-open $fh, '<', 'rmsd_xray.xvg';
-my @rmsd;
-while (<$fh>) {
-	chomp;
-	my @line = split;
-	push @time, $line[0];
-	push @rmsd, $line[1];
+	close $fh;
+	plot({
+		data => {
+			RMSD => [
+				[@time],
+				[@rmsd]
+			]
+		},
+	#	execute           => 1,
+	#	'input.file'      => $tmp_filename,
+		'output.filename' => 'rmsd_xray.svg',
+		'plot.type'       => 'plot',
+		set_figwidth      => 12,
+		'show.legend'     => 0,
+		title             => 'RMSD with starting crystal structure',
+		xlabel            => 'Time (ps)',
+		xlim              => "0, $time[-1]",
+		ylabel            => 'RMSD (Å)'
+	});
+	write_latex_figure({
+		alignment    => '\centering',
+		'image.file' => 'rmsd_xray.svg',
+		caption      => 'RMSD with Starting Structure',
+		label        => 'fig:rmsd_xray',
+		fh           => $tex,
+		width        => '\textwidth'
+	});
 }
-close $fh;
-plot({
-	data => {
-		RMSD => [
-			[@time],
-			[@rmsd]
-		]
-	},
-#	execute           => 1,
-#	'input.file'      => $tmp_filename,
-	'output.filename' => 'rmsd_xray.svg',
-	'plot.type'       => 'plot',
-	set_figwidth      => 12,
-	'show.legend'     => 0,
-	title             => 'RMSD with starting crystal structure',
-	xlabel            => 'Time (ps)',
-	xlim              => "0, $time[-1]",
-	ylabel            => 'RMSD (Å)'
-});
-write_latex_figure({
-	alignment    => '\centering',
-	'image.file' => 'rmsd_xray.svg',
-	caption      => 'RMSD with Starting Structure',
-	label        => 'fig:rmsd_xray',
-	fh           => $tex,
-	width        => '\textwidth'
-});
 say $tex '\end{document}';
-execute("pdflatex --draftmode $tex_filename");
-execute("pdflatex --draftmode $tex_filename");
-execute("pdflatex --draftmode $tex_filename");
-execute("pdflatex $tex_filename");
-my $pdf = $tex_filename;
-$pdf =~ s/tex$/pdf/;
+my $stem = $tex_filename;
+$stem =~ s/\.tex$//;
+execute("pdflatex --draftmode --halt-on-error -shell-escape $tex_filename");
+execute("pdflatex --draftmode --halt-on-error -shell-escape $tex_filename");
+execute("pdflatex --draftmode --halt-on-error -shell-escape $tex_filename");
+execute("pdflatex --halt-on-error -shell-escape $tex_filename");
+foreach my $suffix ('aux', 'lof', 'out') {
+	unlink "$stem.$suffix";
+}
+my $pdf = "$stem.pdf";
 say 'Wrote ' . colored(['black on_white'], $pdf);
