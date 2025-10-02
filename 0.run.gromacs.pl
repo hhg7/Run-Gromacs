@@ -14,20 +14,34 @@ use Getopt::ArgParse;
 my $parser = Getopt::ArgParse->new_parser(
 	prog         => 'Automate running GROMACS simulations',
 	description  => 'Automating running GROMACS simulations, avoiding errors when moving from one step to the next by a checked (not necessarily perfect!) pipeline',
-	epilog       => "Example:\nperl 0.run.gromacs.pl --emin input/emin-charmm.0.mdp -npt input/npt-charmm.mdp --gmx /home/con/prog/gromacs-2025.3/build/bin/gmx --nvt input/nvt-charmm.mdp --pdb 1uao.noH.pdb -production input/md-charmm.mdp --o\n"
+	epilog       => "Example:\nperl 0.run.gromacs.pl --emin input/emin-charmm.0.mdp -npt input/npt-charmm.mdp --gmx /home/con/prog/gromacs-2025.3/build/bin/gmx --nvt input/nvt-charmm.mdp --pdb 1uao.noH.pdb -production input/md-charmm.mdp --o --log-file \n"
 );
 $parser->add_args(
 	['--emin-input-file', '-emin', required => 1, help => 'Energy minimization input file', type => 'Scalar'],
 	['--force-field', '-ff', required => 0, help => 'The force field desired, e.g. "charmm27"', type => 'Scalar', default => 'charmm27'],
 	['--gmx', required => 1, help => 'gmx executable', type => 'Scalar'],
 	['--ignore-H', required => 1, help => 'pmx pdb2gmx ignore Hydrogens', default => 0, type => 'Bool'],
+	['--log-file', '-l', required => 1, help => 'Put all commands that were run into this log file', type => 'Scalar'],
 	['--npt-input-file', '-npt', required => 1, help => 'Pressure Equilibration input file: Number of particles, Pressure, and Temperature are held constant', type => 'Scalar'],
 	['--nvt-input-file', '-nvt', required => 1, help => 'Equilibration run - temperature: constant Number of particles, Volume, and Temperature', type => 'Scalar'],
-	['--overwrite', '-o', type => 'Bool', default => 0, help => 'Overwrite old output files, by default off', required => 0],
-	['--pdb', '-p', required => 1, type => 'Scalar', required => 1, help => 'Input PDB file; Perhaps better without H?'],
+	['--overwrite', '-o', type => 'Bool', default => 0, help => 'Overwrite old output files, by default off. All previous checkpoint files will be deleted.', required => 0],
+	['--pdb', '-p', type => 'Scalar', required => 1, help => 'Input PDB file; Perhaps better without H?'],
 	['--production-input-file', '-production', required => 0, type => 'Scalar', help => 'Production Input File'],
 	['--water', '-w', type => 'Scalar', default => 'tip3p', help => 'Water model (e.g. "tip3p")', required => 0]
 );
+sub list_regex_files {
+	my $regex = shift;
+	my @files;
+	opendir (my $dh, '.');
+	$regex = qr/$regex/;
+	while (my $file = readdir $dh) {
+		next if $file !~ $regex;
+		next if $file =~ m/^\.{1,2}$/;
+		next unless -f $file;
+		push @files, $file
+	}
+	@files
+}
 my $args = $parser->parse_args( @ARGV );
 my %input;
 # put all inputs that are files here, so that I can check if any are missing before I start long jobs
@@ -46,6 +60,10 @@ if (scalar @missing_input_files > 0) {
 }
 # now copy inputs from $args that aren't files into the input hash
 if ($args->overwrite) {
+   foreach my $file (list_regex_files('^#.+#$')) {
+   	say "deleting $file, which could disrupt future calculations";
+   	unlink $file;
+   }
    $input{overwrite} = 'True';
 } else {
    $input{overwrite} = 'False';
@@ -57,7 +75,8 @@ if ($args->gmx) {
 } else {
 	$input{gmx} = 'gmx';
 }
-
+open my $log, '>', $args->log_file;
+p($args, output => $log);
 sub job ($cmd, @product_files) {
 	say 'The command is ' . colored(['blue on_bright_red'], $cmd);
 	say 'And the products are:';
@@ -66,6 +85,7 @@ sub job ($cmd, @product_files) {
 		die "no product files were entered for cmd: $cmd";
 	}
 	my @existing_files = grep {-f $_} @product_files;
+	say $log $cmd;
 	if (($input{overwrite} eq 'False') && (scalar @existing_files > 0)) { # this has been done before
 		say colored(['black on_green'], "\"$cmd\"\n has been done before");
 		return {
@@ -165,13 +185,15 @@ $r = job("printf \"splitch 1\\nq\\n\" | $input{gmx} make_ndx -f nvt.tpr -o $chai
 # Production run
 #------------
 unless ($args->production_input_file) {
+	close $log;
 	say 'no production input file was specified, so finishing now...';
+	say 'wrote ' . colored(['gray on_black'], $args->log_file);
 	exit;
 }
 my $md_tpr = 'md.tpr';
 $r = job("$input{gmx} grompp -f $input{production_input_file} -c $npt_gro -t $npt_cpt -p $topol -o $md_tpr", $md_tpr);
 my ($md_log, $md_edr, $md_gro, $md_xtc, $md_prev_cpt) = ('md.log', 'md.edr', 'md.gro', 'md.xtc', 'md_prev.cpt');
-$r = job("$input{gmx} mdrun -ntmpi 1 -ntomp 4 -v -deffnm md", $md_log, $md_edr, $md_gro, $md_xtc, $md_prev_cpt);
+$r = job("$input{gmx} mdrun -ntmpi 1 -ntomp 8 -v -deffnm md", $md_log, $md_edr, $md_gro, $md_xtc, $md_prev_cpt);
 #------------
 # Analysis
 #------------
@@ -185,3 +207,5 @@ job("printf \"4\\n1\\n\" | $input{gmx} rms -s $em_tpr -f $md_center -o $rmsd_xra
 # Measure compactness with radius of gyration
 my $gyrate_xvg = 'gyrate.xvg';
 job("echo 1 | $input{gmx} gyrate -f md_center.xtc -s md.tpr -o $gyrate_xvg -xvg none", $gyrate_xvg);
+close $log;
+say 'wrote ' . colored(['gray on_black'], $args->log_file);
