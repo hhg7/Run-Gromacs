@@ -5,11 +5,12 @@ no source::encoding;
 #use re 'debugcolor';
 #use File::Temp 'tempfile';
 use warnings FATAL => 'all';
+use warnings::unused;
 use Cwd 'getcwd';
 use List::MoreUtils 'first_index';
 use autodie ':default';
 use Util 'execute';
-use latex 'write_latex_figure';
+use latex qw(write_2d_array_to_tex_tabular write_latex_figure write_latex_table_input);
 use Matplotlib::Simple 'plot';
 use Term::ANSIColor;
 
@@ -39,7 +40,7 @@ say $tex '\pdfsuppresswarningpagegroup=1
 \usepackage[colorlinks=true,urlcolor=blue,linkcolor=red]{hyperref}
 \begin{document}
 \maketitle
-\listoffigures';
+\tableofcontents';
 #my ($tmp, $tmp_filename) = tempfile(DIR => '/tmp', SUFFIX => '.py', UNLINK => 0);
 #close $tmp;
 my %log2title = (
@@ -52,35 +53,49 @@ foreach my $log (grep {-f $_} @log_files) {
 	open my $fh, '<', $log;
 	my @log = <$fh>;
 	close $fh;
-	my $gromacs_i = first_index {/^GROMACS version:\h+\S+/} @log;
-	my $gromacs_version;
-	if ($log[$gromacs_i] =~ m/^GROMACS version:\h+(\S+)/) {
-		$gromacs_version = $1;
-	} else {
-		die "$log: $log[$gromacs_i] failed regex";
-	}
+	splice @log, 0, first_index { /^GROMACS:\h+/ } @log;
+	my %data;
+	@log = grep {$_ !~ m/^\++\h+PLEASE .+\++/} @log;
+	@log = grep {$_ !~ m/^DOI:\h/} @log;
+	@log = grep {$_ !~ m/^\-+.+Thank You\h\-+/} @log;
 	my $performance_i = first_index { /^Performance:\h+\d+/ } @log;
-	my ($speed1, $speed2);
-	if (($performance_i > 0) && ($log[$performance_i - 1] =~ m/^\h+(\S+)\h+(\S+)/)) {
-		($speed1, $speed2) = ($1, $2);
-	}
 	if (
 			($performance_i > 0)
 			&&
 			($log[$performance_i] =~ m/^Performance:\h+(\d+)\.(\d+)\h+(\d+)\.(\d+)/)
 		) {
-		$speed1 = "$1.$2 $speed1";
-		$speed2 = "$3.$4 $speed2";
+		say $log[$performance_i];
+		$data{$log}{'ns/day'}  = "$1.$2";
+		$data{$log}{'hour/ns'} = "$3.$4";
 	}
 	my $last_i = first_index { /^\h+Statistics over \d+ steps using \d+ frames/ } @log;
 	if ($last_i > 0) {
 		splice @log, $last_i - $#log;
 	}
+	foreach my $line (grep {/^There are: \d+ Atoms$/} @log) {
+		if ($line =~ m/(\d+)/) {
+			$data{$log}{'Atom Count'} = $1;
+		} else {
+			die "$line failed regex.";
+		}
+	}
 	chomp @log;
+	foreach my $line (grep {$_ =~ m/^.+:\h+\H+/} @log) {
+		my @line = split /:\h+/, $line;
+		$data{$log}{$line[0]} = $line[1];
+	}
 #	p @log, array_max => scalar @log;
 	foreach my $writing_index (reverse grep { $log[$_] =~ m/^Writing checkpoint/} 0..$#log) {
 		splice @log, $writing_index, 3;
 	}
+	my $input_param_i = first_index {$_ eq 'Input Parameters:'} @log;
+	my $qm_opts_i     = first_index {$_ eq 'qm-opts:'}          @log;
+	foreach my $i ($input_param_i..$qm_opts_i) {
+		$log[$i] =~ s/^\h+//;
+		my @line = split /\h+=\h+/, $log[$i];
+		$data{$log}{$line[0]} = $line[1];
+	}
+	p %data;
 	my @time_indices = grep {
 									$log[$_-1] =~ m/^\h+Step\h+Time$/
 								&&
@@ -93,7 +108,7 @@ foreach my $log (grep {-f $_} @log_files) {
 	if (scalar @time_indices == 0) {
 		die "Couldn't get times for $log";
 	}
-	my @time;
+	my (@time,%d,@energies,@table,@plot);
 	foreach my $time_index (@time_indices) {
 		if ($log[$time_index] =~ m/(\d+)\.(\d+)$/) {
 			push @time, "$1.$2";
@@ -102,8 +117,6 @@ foreach my $log (grep {-f $_} @log_files) {
 		}
 	}
 	my $reading_energies = 'false';
-	my (%d, @energies);
-	my $newline_str = join ('я', @log);
 	foreach (@log) {
 		if ($_ eq '   Energies (kJ/mol)') {
 			$reading_energies = 'true';
@@ -136,11 +149,6 @@ foreach my $log (grep {-f $_} @log_files) {
 			undef @energies;
 		}
 	}
-	my @plot;
-	my $subtitle = "GROMACS $gromacs_version";
-	if (defined $speed1) {
-		$subtitle .= "; Computation time: $speed1; $speed2";
-	}
 	foreach my $energy (sort keys %d) {
 		my $ylab = '(kJ/mol)';
 		$ylab = 'bar' if $energy =~ m/^Pres/;
@@ -158,7 +166,6 @@ foreach my $log (grep {-f $_} @log_files) {
 				$energy => 'color="red", linewidth=2',
 			},
 			'show.legend' => 0,
-#			subtitle      => $subtitle,
 			title         => $energy,
 			xlabel        => 'Time (ps)',
 			ylabel        => $ylab
@@ -167,7 +174,7 @@ foreach my $log (grep {-f $_} @log_files) {
 	my $stem = $log;
 	$stem =~ s/\.log$//;
 	my $output_image_file = "$stem.svg";
-	my $suptitle = uc $stem;
+	say $tex '\section{' . uc "$stem}";
 	plot({
 #		'input.file'      => $tmp_filename,
 #		execute           => 0,
@@ -186,6 +193,22 @@ foreach my $log (grep {-f $_} @log_files) {
 		label        => "fig:$stem",
 		fh           => $tex,
 		width        => '\textwidth'
+	});
+	foreach my $key (grep {defined $data{$log}{$_}} ('Atom Count', 'coulombtype', 'GROMACS version', 'hour/ns', 'integrator', 'ns/day', 'System total charge')) {
+		push @table, [$key, $data{$log}{$key}];
+	}
+	write_2d_array_to_tex_tabular({
+		data           => \@table,
+		tex_filename   => "$stem.tex",
+		header         => ['Metric', 'Value'],
+	});
+	write_latex_table_input({
+		alignment    => '\centering',
+		fh				=> $tex,
+		'tex.file'	=> "$stem.tex",
+		caption		=> "$log2title{$log}",
+		label			=> $log,
+		size			=> '\tiny'
 	});
 }
 my (%plot_data, %gy);
@@ -323,7 +346,7 @@ execute("pdflatex --draftmode --halt-on-error -shell-escape $tex_filename");
 execute("pdflatex --draftmode --halt-on-error -shell-escape $tex_filename");
 execute("pdflatex --draftmode --halt-on-error -shell-escape $tex_filename");
 execute("pdflatex --halt-on-error -shell-escape $tex_filename");
-foreach my $suffix ('aux', 'lof', 'out') {
+foreach my $suffix (grep {-f "$stem.$_"} ('aux', 'lof', 'log', 'out', 'toc')) {
 	unlink "$stem.$suffix";
 }
 my $pdf = "$stem.pdf";
