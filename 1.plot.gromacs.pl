@@ -64,7 +64,6 @@ foreach my $log (grep {-f $_} @log_files) {
 			&&
 			($log[$performance_i] =~ m/^Performance:\h+(\d+)\.(\d+)\h+(\d+)\.(\d+)/)
 		) {
-		say $log[$performance_i];
 		$data{$log}{'ns/day'}  = "$1.$2";
 		$data{$log}{'hour/ns'} = "$3.$4";
 	}
@@ -95,7 +94,6 @@ foreach my $log (grep {-f $_} @log_files) {
 		my @line = split /\h+=\h+/, $log[$i];
 		$data{$log}{$line[0]} = $line[1];
 	}
-	p %data;
 	my @time_indices = grep {
 									$log[$_-1] =~ m/^\h+Step\h+Time$/
 								&&
@@ -149,6 +147,31 @@ foreach my $log (grep {-f $_} @log_files) {
 			undef @energies;
 		}
 	}
+	foreach my $line (grep {/^Running on \d+ node/} @log) {
+		if ($line =~ m/^Running on (\d+) nodes? with total (\d+) cores, (\d+) processing units$/) {
+			$data{$log}{nodes} = $1;
+			$data{$log}{cores} = $2;
+			$data{$log}{'processing units'} = $3;
+		}
+		last;
+	}
+	foreach my $line (grep {/^Hardware detected on host /} @log) {
+		if ($line =~ m/^Hardware detected on host (.+):$/) {
+			$data{$log}{Host} = $1;
+		}
+		last;
+	}
+	p $data{$log};
+	my $str = join ('я', @log);
+	if ($str =~ m/
+	\h+Vendor:\h+[^я]+я
+	\h+Brand:\h+([^я]+)
+	/x) {
+		$data{$log}{CPU} = $1;
+	} else {
+		p $str;
+		die "$log failed CPU info regex.";
+	}
 	foreach my $energy (sort keys %d) {
 		my $ylab = '(kJ/mol)';
 		$ylab = 'bar' if $energy =~ m/^Pres/;
@@ -194,7 +217,7 @@ foreach my $log (grep {-f $_} @log_files) {
 		fh           => $tex,
 		width        => '\textwidth'
 	});
-	foreach my $key (grep {defined $data{$log}{$_}} ('Atom Count', 'coulombtype', 'GROMACS version', 'hour/ns', 'integrator', 'ns/day', 'System total charge')) {
+	foreach my $key (grep {defined $data{$log}{$_}} ('Atom Count', 'coulombtype', 'cores', 'CPU', 'GROMACS version', 'Host', 'hour/ns', 'integrator', 'nodes', 'ns/day', 'processing units', 'System total charge')) {
 		push @table, [$key, $data{$log}{$key}];
 	}
 	write_2d_array_to_tex_tabular({
@@ -208,7 +231,7 @@ foreach my $log (grep {-f $_} @log_files) {
 		'tex.file'	=> "$stem.tex",
 		caption		=> "$log2title{$log}",
 		label			=> $log,
-		size			=> '\tiny'
+#		size			=> '\tiny'
 	});
 }
 my (%plot_data, %gy);
