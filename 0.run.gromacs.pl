@@ -59,15 +59,6 @@ if (scalar @missing_input_files > 0) {
 	die 'the above files do not exist or are not files';
 }
 # now copy inputs from $args that aren't files into the input hash
-if ($args->overwrite) {
-   foreach my $file (list_regex_files('^#.+#$')) {
-   	say "deleting $file, which could disrupt future calculations";
-   	unlink $file;
-   }
-   $input{overwrite} = 'True';
-} else {
-   $input{overwrite} = 'False';
-}
 $input{water} = $args->water;
 $input{force_field} = $args->force_field;
 if ($args->gmx) {
@@ -77,6 +68,16 @@ if ($args->gmx) {
 }
 open my $log, '>', $args->log_file;
 p($args, output => $log);
+if ($args->overwrite) {
+   foreach my $file (list_regex_files('^#.+#$')) {
+      say $log "deleting $file, which could disrupt future calculations";
+      unlink $file;
+   }
+   $input{overwrite} = 'True';
+} else {
+   $input{overwrite} = 'False';
+}
+
 sub job ($cmd, @product_files) {
 	say 'The command is ' . colored(['blue on_bright_red'], $cmd);
 	say 'And the products are:';
