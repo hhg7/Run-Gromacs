@@ -58,6 +58,18 @@ foreach my $log (grep {-f $_} @log_files) {
 	@log = grep {$_ !~ m/^\++\h+PLEASE .+\++/} @log;
 	@log = grep {$_ !~ m/^DOI:\h/} @log;
 	@log = grep {$_ !~ m/^\-+.+Thank You\h\-+/} @log;
+	foreach my $i (reverse 0..$#log) {
+		if ($log[$i] =~ m/^\h+Time:\h+(\d+)\.(\d+)\h+(\d+)\.(\d+)\h+(\d+)\.(\d+)/) {
+			$data{$log}{'Core Time (s)'} = "$1.$2";
+			$data{$log}{'Wall Time (s)'} = "$3.$4";
+			$data{$log}{'Time (%)'} = "$5.$6";
+			splice @log, $i, 1;
+			$data{$log}{'Wall Time (min)'} = $data{$log}{'Wall Time (s)'} / 60;
+			$data{$log}{'Wall Time (hr)'}  = $data{$log}{'Wall Time (s)'} / 3600;
+			last;
+		}
+	}
+	my $str = join ('я', @log);
 	my $performance_i = first_index { /^Performance:\h+\d+/ } @log;
 	if (
 			($performance_i > 0)
@@ -147,22 +159,21 @@ foreach my $log (grep {-f $_} @log_files) {
 			undef @energies;
 		}
 	}
-	foreach my $line (grep {/^Running on \d+ node/} @log) {
-		if ($line =~ m/^Running on (\d+) nodes? with total (\d+) cores, (\d+) processing units$/) {
+	foreach my $i (grep {$log[$_] =~ m/^Running on \d+ node/} 0..$#log) {
+		if ($log[$i] =~ m/^Running on (\d+) nodes? with total (\d+) cores, (\d+) processing units$/) {
 			$data{$log}{nodes} = $1;
 			$data{$log}{cores} = $2;
 			$data{$log}{'processing units'} = $3;
 		}
-		last;
+#		splice @log, $i, 1;
 	}
-	foreach my $line (grep {/^Hardware detected on host /} @log) {
-		if ($line =~ m/^Hardware detected on host (.+):$/) {
+	foreach my $i (grep {$log[$_] =~ m/^Hardware detected on host /} 0..$#log) {
+		if ($log[$i] =~ m/^Hardware detected on host (.+):$/) {
 			$data{$log}{Host} = $1;
 		}
-		last;
+		splice @log, $i, 1; # don't possibly confuse future regex
 	}
 	p $data{$log};
-	my $str = join ('я', @log);
 	if ($str =~ m/
 	\h+Vendor:\h+[^я]+я
 	\h+Brand:\h+([^я]+)
@@ -198,6 +209,22 @@ foreach my $log (grep {-f $_} @log_files) {
 	$stem =~ s/\.log$//;
 	my $output_image_file = "$stem.svg";
 	say $tex '\section{' . uc "$stem}";
+	foreach my $key (grep {defined $data{$log}{$_}} ('Atom Count', 'Core Time (s)','coulombtype', 'cores', 'CPU', 'GROMACS version', 'Host', 'hour/ns', 'integrator', 'nodes', 'ns/day', 'processing units', 'System total charge', 'Time (%)','Wall Time (hr)', 'Wall Time (min)', 'Wall Time (s)')) {
+		push @table, [$key, $data{$log}{$key}];
+	}
+	write_2d_array_to_tex_tabular({
+		data           => \@table,
+		tex_filename   => "$stem.tex",
+		header         => ['Metric', 'Value'],
+	});
+	write_latex_table_input({
+		alignment    => '\centering',
+		fh				=> $tex,
+		'tex.file'	=> "$stem.tex",
+		caption		=> "$log2title{$log}",
+		label			=> $log,
+#		size			=> '\tiny'
+	});
 	plot({
 #		'input.file'      => $tmp_filename,
 #		execute           => 0,
@@ -216,22 +243,6 @@ foreach my $log (grep {-f $_} @log_files) {
 		label        => "fig:$stem",
 		fh           => $tex,
 		width        => '\textwidth'
-	});
-	foreach my $key (grep {defined $data{$log}{$_}} ('Atom Count', 'coulombtype', 'cores', 'CPU', 'GROMACS version', 'Host', 'hour/ns', 'integrator', 'nodes', 'ns/day', 'processing units', 'System total charge')) {
-		push @table, [$key, $data{$log}{$key}];
-	}
-	write_2d_array_to_tex_tabular({
-		data           => \@table,
-		tex_filename   => "$stem.tex",
-		header         => ['Metric', 'Value'],
-	});
-	write_latex_table_input({
-		alignment    => '\centering',
-		fh				=> $tex,
-		'tex.file'	=> "$stem.tex",
-		caption		=> "$log2title{$log}",
-		label			=> $log,
-#		size			=> '\tiny'
 	});
 }
 my (%plot_data, %gy);
