@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 
 use 5.042;
+no source::encoding;
 use warnings FATAL => 'all';
 use autodie ':default';
 use Devel::Confess 'color';
@@ -160,7 +161,7 @@ p $r;
 say '---------------';
 say '--Now running energy minimization';
 say '---------------';
-$r = job( "$input{gmx} mdrun -v -deffnm em -ntmpi 1 -ntomp 8", $em_log, $em_gro, $em_trr, $em_edr);
+$r = job( "$input{gmx} mdrun -v -deffnm em", $em_log, $em_gro, $em_trr, $em_edr);
 #------------
 # Equilibration run - temperature
 # first phase is conducted under an NVT ensemble (constant Number of particles, Volume, and Temperature)
@@ -170,7 +171,7 @@ $r = job("$input{gmx} grompp -f $input{nvt} -c $em_gro -r $em_gro -p $topol -o $
 my ($nvt_log, $nvt_edr, $nvt_gro, $nvt_cpt) = ('nvt.log', 'nvt.edr', 'nvt.gro', 'nvt.cpt');
 # checkpoint file is "cpt"
 # comment out if debugging, it's slow
-$r = job("$input{gmx} mdrun -ntmpi 1 -ntomp 8 -v -deffnm nvt", $nvt_log, $nvt_edr, $nvt_gro, $nvt_cpt);
+$r = job("$input{gmx} mdrun -v -deffnm nvt", $nvt_log, $nvt_edr, $nvt_gro, $nvt_cpt);
 #------------
 # Equilibration run - pressure
 # Number of particles, Pressure, and Temperature are held constant (isothermal/isobaric)
@@ -178,7 +179,7 @@ $r = job("$input{gmx} mdrun -ntmpi 1 -ntomp 8 -v -deffnm nvt", $nvt_log, $nvt_ed
 my $npt_tpr = 'npt.tpr';
 $r = job("$input{gmx} grompp -f $input{npt} -c $nvt_gro -r $nvt_gro -t $nvt_cpt -p $topol -o $npt_tpr", $npt_tpr);
 my ($npt_edr, $npt_gro, $npt_cpt) = ('npt.edr', 'npt.gro', 'npt.cpt');
-$r = job("$input{gmx} mdrun -ntmpi 1 -ntomp 8 -v -deffnm npt", $npt_edr, $npt_gro, $npt_cpt);
+$r = job("$input{gmx} mdrun -v -deffnm npt", $npt_edr, $npt_gro, $npt_cpt);
 my $chain_ndx = 'npt.chains.ndx';
 $r = job("printf \"splitch 1\\nq\\n\" | $input{gmx} make_ndx -f nvt.tpr -o $chain_ndx", $chain_ndx);
 # view the output from above thus: gmx check -n npt.chains.ndx
@@ -194,7 +195,7 @@ unless ($args->production_input_file) {
 my $md_tpr = 'md.tpr';
 $r = job("$input{gmx} grompp -f $input{production_input_file} -c $npt_gro -t $npt_cpt -p $topol -o $md_tpr", $md_tpr);
 my ($md_log, $md_edr, $md_gro, $md_xtc, $md_prev_cpt) = ('md.log', 'md.edr', 'md.gro', 'md.xtc', 'md_prev.cpt');
-$r = job("$input{gmx} mdrun -ntmpi 1 -ntomp 8 -v -deffnm md", $md_log, $md_edr, $md_gro, $md_xtc, $md_prev_cpt);
+$r = job("$input{gmx} mdrun -v -deffnm md", $md_log, $md_edr, $md_gro, $md_xtc, $md_prev_cpt);
 #------------
 # Analysis
 #------------
