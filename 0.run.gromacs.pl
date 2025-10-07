@@ -82,34 +82,32 @@ if ($args->overwrite) {
 sub job ($cmd, @product_files) {
 	say 'The command is ' . colored(['blue on_bright_red'], $cmd);
 	say 'And the products are:';
-	p @product_files;
 	if (scalar @product_files == 0) {
 		die "no product files were entered for cmd: $cmd";
 	}
 	my @existing_files = grep {-f $_} @product_files;
-	say $log $cmd;
+	my %r = (
+		cmd             => $cmd,
+		'product.files' => [@product_files],
+	);
 	if (($input{overwrite} eq 'False') && (scalar @existing_files > 0)) { # this has been done before
 		say colored(['black on_green'], "\"$cmd\"\n has been done before");
-		return {
-			'done' => 'before',
-			'exit' => 0
-		}
+		$r{done} = 'before';
+		p(%r, output => $log);
+		p %r;
+		return \%r;
 	}
-	my ($stdout, $stderr, $exit) = capture {
+	($hash{stdout}, $hash{stderr}, $hash{'exit'}) = capture {
 		system( $cmd );
 	};
+	$r{done} = 'now';
+	p %r;
+	p(%r, output => $log);
 	if ($exit != 0) {
-		say "exit = $exit";
-		say "STDOUT = $stdout";
-		say "STDERR = $stderr";
+		p %r;
 		die "$cmd failed"
 	}
-	return {
-		done   => 'now',
-		stdout => $stdout,
-		stderr => $stderr,
-		exit   => $exit
-	}
+	return \%r;
 }
 #------------
 my $processed_gro = $input{pdb};

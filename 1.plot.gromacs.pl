@@ -3,7 +3,6 @@
 use 5.042;
 no source::encoding;
 #use re 'debugcolor';
-#use File::Temp 'tempfile';
 use warnings FATAL => 'all';
 use warnings::unused;
 use Cwd 'getcwd';
@@ -20,7 +19,6 @@ This script plots output from Gromacs output files and puts all output into a La
 
 =cut
 
-my @log_files = ('em.log', 'nvt.log', 'npt.log', 'md.log');
 #my @xvg_files = ('gyrate.xvg', 'rmsd_xray.xvg', 'mindist.xvg');
 #my @missing_files = grep {not -f $_} (@log_files, @xvg_files);
 #if (scalar @missing_files > 0) {
@@ -49,7 +47,7 @@ my %log2title = (
 	'em.log'  => 'Energy Minimization',
 	'md.log'  => 'Molecular Dynamics'
 );
-foreach my $log (grep {-f $_} @log_files) {
+foreach my $log (grep {-f $_} ('em.log', 'nvt.log', 'npt.log', 'md.log')) {
 	open my $fh, '<', $log;
 	my @log = <$fh>;
 	close $fh;
@@ -58,6 +56,13 @@ foreach my $log (grep {-f $_} @log_files) {
 	@log = grep {$_ !~ m/^\++\h+PLEASE .+\++/} @log;
 	@log = grep {$_ !~ m/^DOI:\h/} @log;
 	@log = grep {$_ !~ m/^\-+.+Thank You\h\-+/} @log;
+	foreach my $i (grep {$log[$_] =~ m/^DD\h+step\h+\d+/} reverse 0..$#log) {
+		splice @log, $i-1, 2; # remove this line and the blank that comes before it
+	}
+	foreach my $i (grep {$log[$_] =~ m/^step\h+\d+\h+Turning on/} reverse 0..$#log) {
+		splice @log, $i, 1;
+	}
+	@log = grep {$_ !~ m/^colvars:\h+Initializing\h/} @log;
 	foreach my $i (reverse 0..$#log) {
 		if ($log[$i] =~ m/^\h+Time:\h+(\d+)\.(\d+)\h+(\d+)\.(\d+)\h+(\d+)\.(\d+)/) {
 			$data{$log}{'Core Time (s)'} = "$1.$2";
@@ -101,9 +106,11 @@ foreach my $log (grep {-f $_} @log_files) {
 	}
 	my $input_param_i = first_index {$_ eq 'Input Parameters:'} @log;
 	my $qm_opts_i     = first_index {$_ eq 'qm-opts:'}          @log;
-	foreach my $i ($input_param_i..$qm_opts_i) {
+	foreach my $i (reverse $input_param_i..$qm_opts_i) {
 		$log[$i] =~ s/^\h+//;
 		my @line = split /\h+=\h+/, $log[$i];
+		splice @log, $i, 1; # prevent regex confusion later on
+		next unless scalar @line == 2;
 		$data{$log}{$line[0]} = $line[1];
 	}
 	my @time_indices = grep {
@@ -173,7 +180,6 @@ foreach my $log (grep {-f $_} @log_files) {
 		}
 		splice @log, $i, 1; # don't possibly confuse future regex
 	}
-	p $data{$log};
 	if ($str =~ m/
 	\h+Vendor:\h+[^я]+я
 	\h+Brand:\h+([^я]+)
@@ -205,6 +211,7 @@ foreach my $log (grep {-f $_} @log_files) {
 			ylabel        => $ylab
 		};
 	}
+#	p @plot, array_max => 509; # debugging
 	my $stem = $log;
 	$stem =~ s/\.log$//;
 	my $output_image_file = "$stem.svg";
@@ -271,7 +278,7 @@ if (-f 'gyrate.xvg') {
 		title             => 'Gyration',
 		xlabel            => 'Time (ps)',
 		ylabel            => 'Radius (nm)',
-		xlim              => "0, $gy{'time'}[-1]" # avoid whitespace on right and left sides
+		set_xlim          => "0, $gy{'time'}[-1]" # avoid whitespace on right and left sides
 	});
 	write_latex_figure({
 		alignment    => '\centering',
@@ -319,7 +326,7 @@ if (-f 'mindist.xvg') {
 		suptitle          => $prop{title},
 		title             => $prop{subtitle},
 		xlabel            => 'Time (ps)',
-		xlim              => "0, $time[-1]", # avoid whitespace on right and left sides
+		set_xlim          => "0, $time[-1]", # avoid whitespace on right and left sides
 		ylabel            => 'Radius (nm)',
 		'set.options'     => {
 			'box1' => 'marker = "|"',
@@ -361,7 +368,7 @@ if (-f 'rmsd_xray.xvg') {
 		'show.legend'     => 0,
 		title             => 'RMSD with starting crystal structure',
 		xlabel            => 'Time (ps)',
-		xlim              => "0, $time[-1]",
+		set_xlim          => "0, $time[-1]",
 		ylabel            => 'RMSD (Å)'
 	});
 	write_latex_figure({
