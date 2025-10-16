@@ -8,7 +8,8 @@ use warnings::unused;
 use Cwd 'getcwd';
 use List::MoreUtils 'first_index';
 use autodie ':default';
-use Util 'execute';
+use File::Temp 'tempfile';
+use Util qw(list_regex_files execute json_file_to_ref);
 use latex qw(write_2d_array_to_tex_tabular write_latex_figure write_latex_table_input);
 use Matplotlib::Simple 'plot';
 use Term::ANSIColor;
@@ -19,6 +20,10 @@ This script plots output from Gromacs output files and puts all output into a La
 
 =cut
 
+my $datfile  = 'rmsd.bin.dat';
+unless ((-f $datfile) && (-s $datfile > 9)) {
+	die "$datfile doesn't exist, or isn't a proper size"; # die ASAP to save time
+}
 #my @xvg_files = ('gyrate.xvg', 'rmsd_xray.xvg', 'mindist.xvg');
 #my @missing_files = grep {not -f $_} (@log_files, @xvg_files);
 #if (scalar @missing_files > 0) {
@@ -39,8 +44,6 @@ say $tex '\pdfsuppresswarningpagegroup=1
 \begin{document}
 \maketitle
 \tableofcontents';
-#my ($tmp, $tmp_filename) = tempfile(DIR => '/tmp', SUFFIX => '.py', UNLINK => 0);
-#close $tmp;
 my %log2title = (
 	'npt.log' => 'Number of particles, Pressure, and Temperature are held constant',
 	'nvt.log' => 'NVT ensemble (constant Number of particles, Volume, and Temperature)',
@@ -252,7 +255,37 @@ foreach my $log (grep {-f $_} ('em.log', 'nvt.log', 'npt.log', 'md.log')) {
 		width        => '\textwidth'
 	});
 }
+my $dat2json = 'dat2json.py';
+my $rmsdjson = 'rmsd.bin.json';
+unless ((-f $dat2json) && (-s $dat2json > 9)) {
+	open my $py, '>', $dat2json;
+	say $py 'import numpy as np
+import json
+
+def ref_to_json_file(data, filename):
+	json1=json.dumps(data)
+	f = open(filename,"w+")
+	print(json1,file=f)
+# 1. Read the binary data file
+# The data is a raw dump of 32-bit floats (np.float32)';
+	say $py "binary_file = '$datfile' # Assuming you named the output with -bin as .dat";
+	say $py 'data = np.fromfile(binary_file, dtype=np.float32)
+
+num_frames = int(np.sqrt(data.size))
+
+if num_frames * num_frames != data.size:
+	print("Error: Data size does not correspond to a square matrix. Check your input.")
+else:
+	# 3. Reshape the 1D array into the N x N matrix
+	rmsd_matrix = data.reshape(num_frames, num_frames)';
+	say $py	"ref_to_json_file(rmsd_matrix.tolist(), '$rmsdjson')";
+}
+unless (-f $rmsdjson) {
+	execute("python $dat2json"); # writes rmsd.bin.json
+}
 my (%plot_data, %gy);
+my ($tmp, $tmp_filename) = tempfile(DIR => '/tmp', SUFFIX => '.py', UNLINK => 0);
+close $tmp;
 if (-f 'gyrate.xvg') {
 	my @gy_header = ('time', 'Gyration Radius of Molecule', 'Radius of gyration (x)', 'Radius of gyration (y)', 'Radius of gyration (z)');
 	open my $fh, '<', 'gyrate.xvg';
@@ -269,8 +302,8 @@ if (-f 'gyrate.xvg') {
 		@{ $plot_data{$key}[1] } = @{ $gy{$key}   };
 	}
 	plot({
-	#	execute           => 0,
-	#	'input.file'      => $tmp_filename,
+		execute           => 0,
+		'input.file'      => $tmp_filename,
 		data              => \%plot_data,
 		'output.filename' => 'gyrate.svg',
 		'plot.type'       => 'plot',
@@ -318,8 +351,8 @@ if (-f 'mindist.xvg') {
 	close $fh;
 	plot({
 		data              => \%plot_data,
-	#	execute           => 0,
-	#	'input.file'      => $tmp_filename,
+		execute           => 0,
+		'input.file'      => $tmp_filename,
 		'output.filename' => 'mindist.svg',
 		'plot.type'       => 'plot',
 		set_figwidth      => 12,
@@ -360,8 +393,8 @@ if (-f 'rmsd_xray.xvg') {
 				[@rmsd]
 			]
 		},
-	#	execute           => 1,
-	#	'input.file'      => $tmp_filename,
+		execute           => 0,
+		'input.file'      => $tmp_filename,
 		'output.filename' => 'rmsd_xray.svg',
 		'plot.type'       => 'plot',
 		set_figwidth      => 12,
@@ -380,7 +413,109 @@ if (-f 'rmsd_xray.xvg') {
 		width        => '\textwidth'
 	});
 }
+mkdir 'svg' unless -d 'svg';
+say $tex '\section{2D RMSD}';
+my $d = json_file_to_ref($rmsdjson);
+my $n_points = scalar @{ $d };
+say 'Writing 2D-RMSD output on line ' . __LINE__;
+plot({
+	'output.filename' => 'svg/2d.rmsd.png',
+	cblabel				=> 'RMSD',
+	cmap					=> 'gist_rainbow',
+	data              => $d,
+	'plot.type'       => 'imshow',
+	set_xlim          => "0, $n_points",
+	set_ylim          => "0, $n_points",
+	title             => '2-D RMSD',
+	xlabel				=> 'Time (ps)',
+	ylabel				=> 'Time (ps)'
+});
+say 'Finished 2D-RMSD output on line ' . __LINE__;
+write_latex_figure({
+	alignment    => '\centering',
+	'image.file' => 'svg/2d.rmsd.svg',
+	caption      => '2d RMSD',
+	label        => 'fig:2d.rmsd',
+	fh           => $tex,
+	width        => '\textwidth'
+});
+say $tex '\section{H-bonds}';
+my %write_latex_fig;
+my @hb_files = grep {$_ !~ m/(?:dist|ang)/} list_regex_files('\.xvg$', 'hbond');
+#my %dist_type = (
+#	num	=> 'Number of hydrogen bonds as a function of time',
+#	dist	=> 'Distance distribution of all hydrogen bonds',
+#	ang	=> 'Angle distribution of all hydrogen bonds',
+#	dan	=> 'Number of donors and acceptors analyzed for each frame'
+#);
+foreach my $hb (@hb_files) {
+	my (@header, %plot, @time, %d);
+	say "Reading $hb";
+	open my $fh, '<', $hb;
+	while (<$fh>) {
+		next if /^#/;
+		if (/^@\h+(\w+)\h*(?:|label)\h*"([^"]+)/) {
+			$plot{$1} = $2;
+			next;
+		}
+		if (/^@\h+s(\d+)\h+legend\h+"([^"]+)/) {
+			$header[$1] = $2;
+		}
+		next if /^@/;
+		chomp;
+		my @line = split;
+		push @time, shift @line;
+		foreach my $col (@header) {
+			die "undefined element in $hb at line $." if not defined $line[0];
+			push @{ $plot{$col} }, shift @line;
+		}
+	}
+	close $fh;
+	foreach my $col (@header) {
+		@{ $d{$col}[0] } = @time;
+		@{ $d{$col}[1] } = @{ $plot{$col} };
+	}
+	my $stem = $hb;
+	$stem =~ s/^hbond\///; # directory
+	$stem =~ s/\.xvg$//;
+	my $outfile_svg = "svg/$stem.svg";
+	my ($g1, $g2);
+	if ($stem =~ m/hbond\.([^\.]+)\.([^\.]+)/) {
+		($g1, $g2) = ($1, $2);
+	} else {
+		die "$stem failed regex.";
+	}
+	plot({
+		data					=> \%d,
+		execute           => 0,
+		'input.file'      => $tmp_filename,
+		'output.filename'	=> $outfile_svg,
+		'plot.type'			=> 'plot',
+		set_figwidth      => 12,
+		title					=> "$plot{title}: $g1 and $g2",
+		xlabel				=> $plot{xaxis},
+		ylabel				=> $plot{yaxis}
+	});
+	$write_latex_fig{$g1}{$g2} = {
+		alignment    => '\centering',
+		'image.file' => $outfile_svg,
+#		caption      => 'RMSD with Starting Structure',
+		label        => "fig:$stem",
+		fh           => $tex,
+		width        => '\textwidth'
+	};
+}
+execute("python $tmp_filename");
+foreach my $g1 (sort keys %write_latex_fig) {
+	my $g1_tex = $g1;
+	$g1_tex =~ s/[!@#\$\%^&*\(\)\{\}\[\]\<\>,\/'"\-\h;\+=_]+/ /g;
+	say $tex '\subsection{' . "$g1_tex}";
+	foreach my $g2 (sort keys %{ $write_latex_fig{$g1} }) {
+		write_latex_figure( $write_latex_fig{$g1}{$g2} );
+	}
+}
 say $tex '\end{document}';
+close $tex;
 my $stem = $tex_filename;
 $stem =~ s/\.tex$//;
 execute("pdflatex --draftmode --halt-on-error -shell-escape $tex_filename");

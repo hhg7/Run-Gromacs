@@ -3,18 +3,55 @@
 use 5.042;
 no source::encoding;
 use warnings FATAL => 'all';
+use warnings::unused;
 use autodie ':default';
 use Cwd 'getcwd';
-use Util 'execute';
+use Capture::Tiny 'capture';
+use DDP {output => 'STDOUT', array_max => 10, show_memsize => 1};
+use Devel::Confess 'color';
 use Matplotlib::Simple 'plot';
 use Getopt::ArgParse;
 use Term::ANSIColor;
 use latex qw(write_2d_array_to_tex_tabular write_latex_figure write_latex_table_input);
 
+sub execute ($cmd, $return = 'exit', $die = 1) {
+	if ($return !~ m/^(exit|stdout|stderr|all)$/) {
+		die "you gave \$return = \"$return\", while this subroutine only accepts ^(exit|stdout|stderr)\$";
+	}
+	my ($stdout, $stderr, $exit) = capture {
+		system( $cmd )
+	};
+	if (($die == 1) && ($exit != 0)) {
+		say STDERR "exit = $exit";
+		say STDERR "STDOUT = $stdout";
+		say STDERR "STDERR = $stderr";
+		die "$cmd\n failed";
+	}
+	if ($return eq 'exit') {
+		return $exit
+	} elsif ($return eq 'stderr') {
+		chomp $stderr;
+		return $stderr
+	} elsif ($return eq 'stdout') {
+		chomp $stdout;
+		return $stdout
+	} elsif ($return eq 'all') {
+		chomp $stdout;
+		chomp $stderr;
+		return {
+			exit   => $exit, 
+			stdout => $stdout, 
+			stderr => $stderr
+		}
+	} else {
+		die "$return broke pigeonholes"
+	}
+	return $stdout
+}
 my $parser = Getopt::ArgParse->new_parser(
 	prog        => 'Plot output from Gromacs\' colvars module',
-	description => 'Make a plot using Matplotlib::Simple',
-	epilog      => 'perl ' . __FILE__ . '',
+	description => 'Make plots of colvars output',
+	epilog      => 'perl ' . __FILE__ . ' -t 2PUY -l 2puy.colvars',
 );
 
 $parser->add_args(
@@ -68,6 +105,7 @@ while (<$fh>) {
 	}
 	next if /^#/;
 	my @line = split;
+	next if scalar @line != scalar @header; # incomplete lines can occur at the end
 	push @time, $dt * $line[0];
 	foreach my $col (1..$#header) {
 		push @{ $data{$header[$col]} }, $line[$col];
@@ -113,7 +151,7 @@ plot({
 	plots             => \@plots,
 	ncols             => scalar @header,
 	set_figwidth      => 12,
-	suptitle          => 'Protein1 vs Protein3 Colvars'
+	suptitle          => $args->title . ' Colvars'
 });
 say $tex '\section{Plot of Output}';
 write_latex_figure({
