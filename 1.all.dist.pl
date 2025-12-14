@@ -60,7 +60,7 @@ foreach my $g1 (@group) {
 		$stem = "$dir/$stem";
 		execute( "$gmx distance -f md.xtc -s md.tpr -n $ndx_file -oav $stem.oav.xvg -oall $stem.oall.xvg -oxyz $stem.oxyz.xvg -oh $stem.oh.xvg -oallstat $stem.oallstat.xvg -select 'com of group \"$g1\" plus com of group \"$g2\"'" );
 		my @files = ("$stem.oav.xvg", "$stem.oall.xvg", "$stem.oxyz.xvg", "$stem.oh.xvg", "$stem.oallstat.xvg");
-		my @missing_files = grep {not -s $_} @files;
+		my @missing_files = grep {not -f $_} @files;
 		if (scalar @missing_files > 0) {
 			p @missing_files;
 			die "$g1 vs $g2: the above files are missing.";

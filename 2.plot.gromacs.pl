@@ -11,7 +11,7 @@ use autodie ':default';
 use File::Temp 'tempfile';
 use Util qw(list_regex_files execute json_file_to_ref);
 use latex qw(write_2d_array_to_tex_tabular write_latex_figure write_latex_table_input);
-use Matplotlib::Simple 'plot';
+use Matplotlib::Simple;
 use Term::ANSIColor;
 
 =mission statement
@@ -235,7 +235,7 @@ foreach my $log (grep {-f $_} ('em.log', 'nvt.log', 'npt.log', 'md.log')) {
 		label			=> $log,
 #		size			=> '\tiny'
 	});
-	plot({
+	plt({
 #		'input.file'      => $tmp_filename,
 #		execute           => 0,
 		'output.filename' => $output_image_file,
@@ -301,7 +301,7 @@ if (-f 'gyrate.xvg') {
 		@{ $plot_data{$key}[0] } = @{ $gy{'time'} };
 		@{ $plot_data{$key}[1] } = @{ $gy{$key}   };
 	}
-	plot({
+	plt({
 		execute           => 0,
 		'input.file'      => $tmp_filename,
 		data              => \%plot_data,
@@ -349,7 +349,7 @@ if (-f 'mindist.xvg') {
 		}
 	}
 	close $fh;
-	plot({
+	plt({
 		data              => \%plot_data,
 		execute           => 0,
 		'input.file'      => $tmp_filename,
@@ -386,7 +386,7 @@ if (-f 'rmsd_xray.xvg') {
 		push @rmsd, $line[1];
 	}
 	close $fh;
-	plot({
+	plt({
 		data => {
 			RMSD => [
 				[@time],
@@ -418,7 +418,7 @@ say $tex '\section{2D RMSD}';
 my $d = json_file_to_ref($rmsdjson);
 my $n_points = scalar @{ $d };
 say 'Writing 2D-RMSD output on line ' . __LINE__;
-plot({
+plt({
 	'output.filename' => 'svg/2d.rmsd.png',
 	cblabel				=> 'RMSD',
 	cmap					=> 'gist_rainbow',
@@ -485,7 +485,7 @@ foreach my $hb (@hb_files) {
 	} else {
 		die "$stem failed regex.";
 	}
-	plot({
+	plt({
 		data					=> \%d,
 		execute           => 0,
 		'input.file'      => $tmp_filename,
